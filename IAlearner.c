@@ -3,7 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <pthread.h> // Librería requerida en la rúbrica para concurrencia
+#include <pthread.h> // para concurrencia
 
 #define PORT 8080
 

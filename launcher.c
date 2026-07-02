@@ -72,10 +72,42 @@ int main() {
             mostrar_info();
         }
         else if (strcmp(comando, "estado") == 0) {
-            printf("[!] El comando 'estado' está en construcción...\n");
+            printf("\n=== Estado de Agentic OS ===\n");
+            printf("[+] Ventanas X11 (Clientes) en ejecución:\n");
+            
+            // imprime los procesos activos '-a' hace que imprima el PID y también el número de proceso que le pasamos
+            int estado_pgrep = system("pgrep -a x11_keys");
+            
+            // Si pgrep no encuentra nada, devuelve un código de error distinto de 0
+            if (estado_pgrep != 0) {
+                printf("    [-] Ninguna ventana activa en este momento.\n");
+            }
+            printf("============================\n");
         }
         else if (strcmp(comando, "cerrar") == 0) {
-            printf("[!] El comando 'cerrar' está en construcción...\n");
+            char input_pid[20];
+            printf(">> Ingresa el PID de la ventana X11 que deseas cerrar: ");
+            
+            // Leemos el PID que el usuario escribe
+            if (fgets(input_pid, sizeof(input_pid), stdin) != NULL) {
+                // Limpiamos el salto de línea como hicimos con el comando principal
+                input_pid[strcspn(input_pid, "\n")] = 0;
+                
+                // Convertimos el texto ingresado a un número entero (pid_t)
+                pid_t pid_a_cerrar = atoi(input_pid);
+                
+                if (pid_a_cerrar > 0) {
+                    // Enviamos la señal SIGTERM para cerrarlo amablemente
+                    if (kill(pid_a_cerrar, SIGTERM) == 0) {
+                        printf("[+] Señal de cierre enviada exitosamente al proceso PID: %d.\n", pid_a_cerrar);
+                    } else {
+                        // Si pones un PID que no existe, te avisa el error
+                        perror("[-] Error al intentar cerrar el proceso");
+                    }
+                } else {
+                    printf("[-] PID inválido. Debe ser un número mayor a 0.\n");
+                }
+            }
         }
         else if (strcmp(comando, "salir") == 0) {
             printf("Saliendo de Agentic Jorge... ¡Hasta pronto!\n");
