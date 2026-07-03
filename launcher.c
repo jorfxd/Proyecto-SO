@@ -7,13 +7,31 @@
 // Función para mostrar el menú de ayuda
 void mostrar_info() {
     printf("\n--- Comandos Disponibles ---\n");
-    printf("* 'nuevo'  : Abre una nueva ventana de captura X11 para Agentic OS.\n");
+    printf("* 'nuevo (numero)'  : Abre nuevas ventanas de captura X11 para Agentic OS.\n");
     printf("* 'estado' : Muestra el estado actual y cuántas ventanas están activas.\n");
     printf("* 'cerrar' : Cierra una ventana específica de captura.\n");
     printf("* 'salir'  : Cierra el entorno, envía la señal de fin al IALearner y termina.\n");
+    printf("* 'colapsar'   : cierra todas las ventanas.\n");
     printf("* 'info'   : Muestra este menú de ayuda nuevamente.\n");
     printf("----------------------------\n");
 }
+
+void cerrar_todo() {
+    printf("\n[!] Iniciando cierre masivo de ventanas X11...\n");
+    
+    // Usamos 'pkill' pero excluyendo nuestro propio PID
+    char comando_kill[100];
+    sprintf(comando_kill, "pgrep -f x11_keys | xargs -r kill"); 
+    
+    // pgrep -f x11_keys busca solo los procesos de tus ventanas
+    // xargs -r kill toma esos PIDs y los mata.
+    if (system(comando_kill) == 0) {
+        printf("[+] Todas las ventanas X11 han sido cerradas.\n");
+    } else {
+        printf("[-] No hay ventanas activas para cerrar.\n");
+    }
+}
+
 
 void manejo_cierre_abrupto(int sig) {
     printf("\n[!] Alerta: Cerrando Agentic Jorge forzosamente. Limpiando ventanas huérfanas...\n");
@@ -44,30 +62,49 @@ int main() {
         comando[strcspn(comando, "\n")] = 0;
 
         // --- LÓGICA DE COMANDOS ---
-        if (strcmp(comando, "nuevo") == 0) {
-            contador_ventanas++; // Sumamos 1 a la cuenta
+        if (strncmp(comando, "nuevo", 5) == 0) {
             
-            // Convertimos el número a texto porque execl solo acepta textos (strings)
-            char id_str[20];
-            sprintf(id_str, "%d", contador_ventanas); 
-
-            pid = fork(); // Clonamos el proceso
-
-            if (pid < 0) {
-                perror("[-] Error: No se pudo hacer fork");
-            } else if (pid == 0) {
-                // SOMOS EL HIJO: Nos transformamos en la ventana y le pasamos el id_str
-                // Nota: Asegúrate de que el ejecutable de tu ventana se llame "x11_keys"
-                execl("./x11_keys", "./x11_keys", id_str, NULL);
-                
-                // Si execl falla, imprimimos error y salimos para no dejar basura
-                perror("[-] Error al ejecutar x11_keys (¿Ya lo compilaste?)");
-                exit(1);
-            } else {
-                // SOMOS EL PADRE (Launcher): Avisamos que todo salió bien
-                printf("[+] Se ha creado la ventana 'proceso%d' con PID: %d\n", contador_ventanas, pid);
+            int cantidad_a_crear = 0; // Inicializamos en 0 por seguridad
+            
+            // Intentamos escanear el número directamente
+            int elementos_leidos = sscanf(comando, "nuevo %d", &cantidad_a_crear);
+            
+            // DEFENSA ESTRICTA: Si no logró leer 1 elemento (el número) o es <= 0
+            if (elementos_leidos != 1 || cantidad_a_crear <= 0) {
+                printf("[-] Error: Formato incompleto o incorrecto.\n");
+                printf("    Ahora es OBLIGATORIO especificar la cantidad de ventanas.\n");
+                printf("    Ejemplo de uso correcto: nuevo 1  (o también: nuevo 5)\n");
+                continue; // Regresa al inicio del bucle pidiendo un nuevo comando
             }
-        } 
+
+            // Bucle para crear las N ventanas solicitadas
+            for (int i = 0; i < cantidad_a_crear; i++) {
+                contador_ventanas++; 
+                
+                char id_str[20];
+                sprintf(id_str, "%d", contador_ventanas); 
+
+                pid = fork(); 
+
+                // ---> DEFENSA NATIVA: Ubuntu rechaza la creación (-1) <---
+                if (pid < 0) {
+                    perror("[-] Error Crítico del SO: fork() devolvió -1 (Recursos agotados)");
+                    printf("    Se aborta la creación de las %d ventanas restantes para no colapsar.\n", (cantidad_a_crear - i));
+                    contador_ventanas--; // Revertimos la cuenta de esta ventana fallida
+                    break; // ROMPE EL BUCLE FOR
+                } 
+                else if (pid == 0) {
+                    // SOMOS EL HIJO
+                    execl("./x11_keys", "./x11_keys", id_str, NULL);
+                    perror("[-] Error al ejecutar x11_keys");
+                    exit(1);
+                } 
+                else {
+                    // SOMOS EL PADRE
+                    printf("[+] Se ha creado la ventana 'proceso%d' con PID: %d\n", contador_ventanas, pid);
+                }
+            }
+        }
         else if (strcmp(comando, "info") == 0) {
             mostrar_info();
         }
@@ -109,9 +146,12 @@ int main() {
                 }
             }
         }
+	else if (strcmp(comando, "colapsar") == 0) {
+	    cerrar_todo();
+	}
         else if (strcmp(comando, "salir") == 0) {
             printf("Saliendo de Agentic Jorge... ¡Hasta pronto!\n");
-	    kill(0,SIGTERM);
+	    kill(0, SIGTERM);
             break;
         }
         else if (strlen(comando) > 0) {

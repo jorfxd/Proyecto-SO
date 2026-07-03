@@ -5,7 +5,6 @@
 #include <arpa/inet.h>
 #include <pthread.h> // para concurrencia
 
-#define PORT 8080
 
 // Función que ejecutará cada hilo para escuchar a una ventana específica
 void *atender_ventana(void *socket_desc) {
@@ -26,6 +25,18 @@ void *atender_ventana(void *socket_desc) {
 }
 
 int main() {
+    FILE *archivo = fopen("config.txt", "r");
+    if (archivo == NULL) {
+        printf("[-] Error: No se encontró el archivo config.txt\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    char puerto_str[20];
+    fgets(puerto_str, sizeof(puerto_str), archivo);
+    fclose(archivo);
+    
+    int puerto_config = atoi(puerto_str); // Convertir texto a número
+
     int server_fd, new_socket;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
@@ -36,9 +47,16 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+    // ---> NUEVA DEFENSA: RECICLAJE INMEDIATO DEL PUERTO <---
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror("Error al configurar SO_REUSEADDR");
+        exit(EXIT_FAILURE);
+    } //termina
+
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY; // Escucha en cualquier IP local
-    address.sin_port = htons(PORT);
+    address.sin_port = htons(puerto_config);
 
     // 2. Vincular el socket al puerto 8080
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
@@ -54,7 +72,7 @@ int main() {
 
     printf("=========================================\n");
     printf("[IALearner] Data Center iniciado.\n");
-    printf("[IALearner] Escuchando en el puerto %d...\n", PORT);
+    printf("[IALearner] Escuchando en el puerto %d...\n", puerto_config);
     printf("=========================================\n");
 
     // 4. Bucle infinito para aceptar ventanas (clientes)
