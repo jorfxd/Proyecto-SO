@@ -1,0 +1,3 @@
+Correo electrónico:Thank,Please,Regards,Meeting,Attached,Information,Update,Schedule,Team,Project
+Artículo científico:Data,Analysis,Results,Method,Study,Model,Research,System,Significant,Effect
+Reporte:System,Data,Network,Security,Application,Server,User,Performance,Service,Infrastructure

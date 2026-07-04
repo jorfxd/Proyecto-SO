@@ -122,8 +122,8 @@ int main(int argc, char *argv[]) {
                 printf("proceso%s -> Letra '%s' enviada al Data Center.\n", id_proceso, name);
             }
 
-            // Según la rúbrica, la captura termina con Return (Enter) o Escape
-            if (keysym == XK_Escape || keysym == XK_Return)
+            // termina con scape
+            if (keysym == XK_Escape)
                 break;
         }
     }
