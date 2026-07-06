@@ -1,164 +1,127 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>      // Para fork(), exec(), pid_t
-#include <sys/wait.h>    // Para waitpid() y limpieza de zombies
+#include <unistd.h>      // Para llamadas al sistema: fork(), exec(), kill()
+#include <sys/wait.h>    // Para waitpid() (limpieza de procesos)
+#include <signal.h>      // Para manejo de señales (SIGTERM, SIGINT)
 
-// Función para mostrar el menú de ayuda
+// ==============================================================================
+// BLOQUE 1: FUNCIONES DE AYUDA Y GESTIÓN DE PROCESOS
+// ==============================================================================
+
+// Muestra el menú interactivo para el usuario
 void mostrar_info() {
     printf("\n--- Comandos Disponibles ---\n");
-    printf("* 'nuevo (numero)'  : Abre nuevas ventanas de captura X11 para Agentic OS.\n");
-    printf("* 'estado' : Muestra el estado actual y cuántas ventanas están activas.\n");
-    printf("* 'cerrar' : Cierra una ventana específica de captura.\n");
-    printf("* 'salir'  : Cierra el entorno, envía la señal de fin al IALearner y termina.\n");
-    printf("* 'colapsar'   : cierra todas las ventanas.\n");
-    printf("* 'info'   : Muestra este menú de ayuda nuevamente.\n");
+    printf("* 'nuevo (numero)'  : Abre N ventanas de captura X11.\n");
+    printf("* 'estado'          : Lista procesos hijos activos.\n");
+    printf("* 'cerrar'          : Cierra una ventana por su PID.\n");
+    printf("* 'salir'           : Cierra todo el entorno y termina.\n");
+    printf("* 'colapsar'        : Cierra todas las ventanas X11 activas.\n");
+    printf("* 'info'            : Muestra este menú.\n");
     printf("----------------------------\n");
 }
 
+// Bloque de Limpieza: usa pgrep para filtrar procesos por nombre y los termina
 void cerrar_todo() {
     printf("\n[!] Iniciando cierre masivo de ventanas X11...\n");
-    
-    // Usamos 'pkill' pero excluyendo nuestro propio PID
-    char comando_kill[100];
-    sprintf(comando_kill, "pgrep -f x11_keys | xargs -r kill"); 
-    
-    // pgrep -f x11_keys busca solo los procesos de tus ventanas
-    // xargs -r kill toma esos PIDs y los mata.
-    if (system(comando_kill) == 0) {
-        printf("[+] Todas las ventanas X11 han sido cerradas.\n");
+    // pgrep -f busca por nombre, xargs pasa los PIDs encontrados al comando kill
+    if (system("pgrep -f x11_keys | xargs -r kill") == 0) {
+        printf("[+] Señal de cierre enviada a todas las ventanas.\n");
     } else {
         printf("[-] No hay ventanas activas para cerrar.\n");
     }
 }
 
-
+// Manejador de señales: garantiza que al presionar Ctrl+C no queden procesos huérfanos
 void manejo_cierre_abrupto(int sig) {
-    printf("\n[!] Alerta: Cerrando Agentic Jorge forzosamente. Limpiando ventanas huérfanas...\n");
-    // kill(0, SIGTERM) envía la señal de terminación a todos los procesos hijos de este grupo
-    kill(0, SIGTERM); 
+    printf("\n[!] Alerta: Cerrando Agentic Jorge por señal externa.\n");
+    kill(0, SIGTERM); // Envía señal a todo el grupo de procesos
     exit(0);
 }
 
-int main() {
-    signal(SIGINT, manejo_cierre_abrupto); // Atrapa el Ctrl+C
-    char comando[100];
-    pid_t pid; // Variable para guardar el ID del proceso
-    int contador_ventanas = 0; // NUEVO: Llevaremos la cuenta de cuántas ventanas creamos
+// ==============================================================================
+// BLOQUE 2: BUCLE PRINCIPAL Y GESTIÓN DEL SISTEMA
+// ==============================================================================
 
-    printf("Hola este es la interaz de Agentic Jorge:)\n");
+int main() {
+    // Registro del manejador de señales para un cierre seguro ante Ctrl+C
+    signal(SIGINT, manejo_cierre_abrupto); 
+    
+    char comando[100];
+    pid_t pid; 
+    int contador_ventanas = 0;
+
+    printf("Hola, este es la interfaz de Agentic Jorge :)\n");
     mostrar_info();
 
     while (1) {
-        // [DEFENSA] Limpiador silencioso de procesos zombies:
-        // Revisa si alguna ventana X11 ya se cerró y libera su memoria.
+        // [DEFENSA] Limpiador silencioso (Non-blocking wait):
+        // Revisa constantemente si algún hijo terminó para liberar sus recursos y evitar zombies.
         while (waitpid(-1, NULL, WNOHANG) > 0);
 
         printf("\nAgenticJorge> ");
+        if (fgets(comando, sizeof(comando), stdin) == NULL) break;
+        comando[strcspn(comando, "\n")] = 0; // Limpiamos el salto de línea
 
-        if (fgets(comando, sizeof(comando), stdin) == NULL) {
-            break; 
-        }
-        comando[strcspn(comando, "\n")] = 0;
-
-        // --- LÓGICA DE COMANDOS ---
+        // --- A. CREACIÓN DE PROCESOS (Comando "nuevo") ---
         if (strncmp(comando, "nuevo", 5) == 0) {
-            
-            int cantidad_a_crear = 0; // Inicializamos en 0 por seguridad
-            
-            // Intentamos escanear el número directamente
-            int elementos_leidos = sscanf(comando, "nuevo %d", &cantidad_a_crear);
-            
-            // DEFENSA ESTRICTA: Si no logró leer 1 elemento (el número) o es <= 0
-            if (elementos_leidos != 1 || cantidad_a_crear <= 0) {
-                printf("[-] Error: Formato incompleto o incorrecto.\n");
-                printf("    Ahora es OBLIGATORIO especificar la cantidad de ventanas.\n");
-                printf("    Ejemplo de uso correcto: nuevo 1  (o también: nuevo 5)\n");
-                continue; // Regresa al inicio del bucle pidiendo un nuevo comando
+            int cantidad_a_crear = 0;
+            // Validamos que el usuario ingrese la cantidad: "nuevo 5"
+            if (sscanf(comando, "nuevo %d", &cantidad_a_crear) != 1 || cantidad_a_crear <= 0) {
+                printf("[-] Error: Debe especificar cantidad. Ejemplo: 'nuevo 1'\n");
+                continue;
             }
 
-            // Bucle para crear las N ventanas solicitadas
             for (int i = 0; i < cantidad_a_crear; i++) {
-                contador_ventanas++; 
-                
+                contador_ventanas++;
                 char id_str[20];
-                sprintf(id_str, "%d", contador_ventanas); 
+                sprintf(id_str, "%d", contador_ventanas);
 
-                pid = fork(); 
+                pid = fork(); // Clonación del proceso
 
-                // ---> DEFENSA NATIVA: Ubuntu rechaza la creación (-1) <---
-                if (pid < 0) {
-                    perror("[-] Error Crítico del SO: fork() devolvió -1 (Recursos agotados)");
-                    printf("    Se aborta la creación de las %d ventanas restantes para no colapsar.\n", (cantidad_a_crear - i));
-                    contador_ventanas--; // Revertimos la cuenta de esta ventana fallida
-                    break; // ROMPE EL BUCLE FOR
-                } 
-                else if (pid == 0) {
-                    // SOMOS EL HIJO
+                if (pid < 0) { // [DEFENSA] Fallo de sistema (recursos agotados)
+                    perror("[-] Error: Fallo en fork()");
+                    contador_ventanas--;
+                    break;
+                } else if (pid == 0) { // [Hijo] Transformación a ventana gráfica
                     execl("./x11_keys", "./x11_keys", id_str, NULL);
-                    perror("[-] Error al ejecutar x11_keys");
+                    perror("[-] Error al ejecutar x11_keys"); // Solo se llega aquí si exec falla
                     exit(1);
-                } 
-                else {
-                    // SOMOS EL PADRE
-                    printf("[+] Se ha creado la ventana 'proceso%d' con PID: %d\n", contador_ventanas, pid);
+                } else { // [Padre] Monitoreo
+                    printf("[+] Ventana 'proceso%d' creada con PID: %d\n", contador_ventanas, pid);
                 }
             }
         }
-        else if (strcmp(comando, "info") == 0) {
-            mostrar_info();
-        }
+        // --- B. LISTADO DE ESTADO ---
         else if (strcmp(comando, "estado") == 0) {
-            printf("\n=== Estado de Agentic OS ===\n");
-            printf("[+] Ventanas X11 (Clientes) en ejecución:\n");
-            
-            // imprime los procesos activos '-a' hace que imprima el PID y también el número de proceso que le pasamos
-            int estado_pgrep = system("pgrep -a x11_keys");
-            
-            // Si pgrep no encuentra nada, devuelve un código de error distinto de 0
-            if (estado_pgrep != 0) {
-                printf("    [-] Ninguna ventana activa en este momento.\n");
-            }
-            printf("============================\n");
+            printf("\n[+] Procesos activos:\n");
+            system("pgrep -a x11_keys");
         }
+        // --- C. CIERRE ESPECÍFICO ---
         else if (strcmp(comando, "cerrar") == 0) {
             char input_pid[20];
-            printf(">> Ingresa el PID de la ventana X11 que deseas cerrar: ");
-            
-            // Leemos el PID que el usuario escribe
+            printf(">> Ingresa el PID a cerrar: ");
             if (fgets(input_pid, sizeof(input_pid), stdin) != NULL) {
-                // Limpiamos el salto de línea como hicimos con el comando principal
-                input_pid[strcspn(input_pid, "\n")] = 0;
-                
-                // Convertimos el texto ingresado a un número entero (pid_t)
                 pid_t pid_a_cerrar = atoi(input_pid);
-                
-                if (pid_a_cerrar > 0) {
-                    // Enviamos la señal SIGTERM para cerrarlo amablemente
-                    if (kill(pid_a_cerrar, SIGTERM) == 0) {
-                        printf("[+] Señal de cierre enviada exitosamente al proceso PID: %d.\n", pid_a_cerrar);
-                    } else {
-                        // Si pones un PID que no existe, te avisa el error
-                        perror("[-] Error al intentar cerrar el proceso");
-                    }
+                if (pid_a_cerrar > 0 && kill(pid_a_cerrar, SIGTERM) == 0) {
+                    printf("[+] Proceso %d terminado.\n", pid_a_cerrar);
                 } else {
-                    printf("[-] PID inválido. Debe ser un número mayor a 0.\n");
+                    printf("[-] PID inválido o inexistente.\n");
                 }
             }
         }
-	else if (strcmp(comando, "colapsar") == 0) {
-	    cerrar_todo();
-	}
+        // --- D. CIERRE MASIVO Y SALIDA ---
+        else if (strcmp(comando, "colapsar") == 0) {
+            cerrar_todo();
+        }
         else if (strcmp(comando, "salir") == 0) {
-            printf("Saliendo de Agentic Jorge... ¡Hasta pronto!\n");
-	    kill(0, SIGTERM);
+            printf("Saliendo de Agentic Jorge... ¡Adiós!\n");
+            kill(0, SIGTERM); // Barre con todos los hijos antes de salir
             break;
         }
         else if (strlen(comando) > 0) {
-            // Si el usuario escribe algo que no existe
-            printf("[-] Comando no reconocido. Consulte 'info' para proseguir.\n");
+            printf("[-] Comando inválido. Escriba 'info' para ayuda.\n");
         }
     }
-    
     return 0;
 }
