@@ -11,7 +11,6 @@
 // ==============================================================================
 // BLOQUE 1: ESTRUCTURAS DE DATOS Y CONFIGURACIÓN GLOBAL
 // ==============================================================================
-
 #define MAX_DICCIONARIOS 3
 #define MAX_PALABRAS 20
 
@@ -23,26 +22,23 @@ typedef struct {
 
 Diccionario diccionarios[MAX_DICCIONARIOS];
 
-// Estructura para el manejo seguro de estadísticas entre hilos
 typedef struct {
     int correos;
     int cientificos;
     int reportes;
     int total_documentos;
-    pthread_mutex_t lock; // Candado para evitar condiciones de carrera (Race Conditions)
+    pthread_mutex_t lock; 
 } EstadisticasUsuario;
 
 EstadisticasUsuario stats = {0, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
 
-// Función comparadora para qsort y strcasecmp (ignora mayúsculas/minúsculas)
 int comparar_palabras(const void *a, const void *b) {
     return strcasecmp((const char *)a, (const char *)b);
 }
 
 // ==============================================================================
-// BLOQUE 2: CARGA Y PREPARACIÓN DE DICCIONARIOS (INTELIGENCIA)
+// BLOQUE 2: CARGA Y PREPARACIÓN DE DICCIONARIOS
 // ==============================================================================
-
 void cargar_diccionarios() {
     FILE *archivo = fopen("diccionarios.txt", "r");
     if (!archivo) {
@@ -54,8 +50,6 @@ void cargar_diccionarios() {
     int i = 0;
     while (fgets(linea, sizeof(linea), archivo) && i < MAX_DICCIONARIOS) {
         linea[strcspn(linea, "\n")] = 0; 
-        
-        // Separamos clase de palabras
         char *clase = strtok(linea, ":");
         if (!clase) continue;
         strcpy(diccionarios[i].clase, clase);
@@ -63,9 +57,7 @@ void cargar_diccionarios() {
         char *palabras_str = strtok(NULL, ":");
         if (!palabras_str) continue;
         
-        // Purificación de palabras: eliminamos espacios, tabulaciones y retornos de carro
         char *palabra = strtok(palabras_str, ", \r\t");
-        
         int j = 0;
         while (palabra != NULL && j < MAX_PALABRAS) {
             strcpy(diccionarios[i].palabras[j], palabra);
@@ -73,36 +65,31 @@ void cargar_diccionarios() {
             j++;
         }
         diccionarios[i].total_palabras = j;
-        
-        // Ordenamos para permitir búsqueda binaria eficiente
         qsort(diccionarios[i].palabras, diccionarios[i].total_palabras, 50, comparar_palabras);
         i++;
     }
     fclose(archivo);
+    printf("[+] Diccionarios cargados.\n");
 }
 
 // ==============================================================================
-// BLOQUE 3: LÓGICA DE INFERENCIA Y MANEJO DE SEÑALES (PROGRAMACIÓN DEFENSIVA)
+// BLOQUE 3: LÓGICA DE INFERENCIA Y MANEJO DE SEÑALES
 // ==============================================================================
-
 void determinar_tipo_usuario() {
     pthread_mutex_lock(&stats.lock);
     int total = stats.total_documentos;
-    
     if (total == 0) {
-        printf("\n[!] No hay suficientes datos.\n");
+        printf("\n[!] No hay suficientes datos para inferir.\n");
         pthread_mutex_unlock(&stats.lock);
         return;
     }
 
-    // Cálculo de proporciones (X) para clasificar al usuario
     float prop_correo = (float)stats.correos / total;
     float prop_cient = (float)stats.cientificos / total;
     float prop_reporte = (float)stats.reportes / total;
 
     printf("\n[IALearner] Análisis Final: Correo: %.2f, Científico: %.2f, Reporte: %.2f\n", prop_correo, prop_cient, prop_reporte);
 
-    // Jerarquía de reglas según la rúbrica
     if (prop_correo > 0.5 && prop_reporte > 0.3) printf("[!] Usuario: Administrativo\n");
     else if (prop_correo > 0.4 && prop_reporte > 0.4) printf("[!] Usuario: Técnico\n");
     else if (prop_correo > 0.3 && prop_cient > 0.4) printf("[!] Usuario: Profesor\n");
@@ -111,7 +98,6 @@ void determinar_tipo_usuario() {
     pthread_mutex_unlock(&stats.lock);
 }
 
-// Manejador de señales: captura Ctrl+C para realizar la inferencia final
 void handle_sigint(int sig) {
     printf("\n[IALearner] Apagando servidor... ejecutando inferencia.\n");
     determinar_tipo_usuario();
@@ -119,23 +105,25 @@ void handle_sigint(int sig) {
 }
 
 // ==============================================================================
-// BLOQUE 4: PROCESAMIENTO CONCURRENTE (HILOS Y SOCKETS)
+// BLOQUE 4: PROCESAMIENTO CONCURRENTE
 // ==============================================================================
-
 void *atender_ventana(void *socket_desc) {
     int sock = *(int*)socket_desc;
+    free(socket_desc);
+    
     char buffer[1024] = {0};
     char oracion[2048] = {0}; 
     char documento_completo[8192] = {0}; 
     char id_proceso[20] = {0}; 
     int valread;
 
-    // A. Recolección de datos asíncrona
     while ((valread = read(sock, buffer, 1024)) > 0) {
         char tecla[50] = {0};
         if (sscanf(buffer, "P%[^:]: %s", id_proceso, tecla) == 2) {
             if (strcmp(tecla, "Return") == 0) {
                 if (strlen(oracion) > 0) {
+                    // IMPRESIÓN POR PANTALLA DE CADA ORACIÓN
+                    printf("[Data Center] [P%s] Oración: %s\n", id_proceso, oracion);
                     strcat(documento_completo, oracion);
                     strcat(documento_completo, " ");
                     memset(oracion, 0, sizeof(oracion));
@@ -146,7 +134,7 @@ void *atender_ventana(void *socket_desc) {
         memset(buffer, 0, sizeof(buffer)); 
     }
 
-    // B. Fase de Clasificación (Bag of Words)
+    // CLASIFICACIÓN
     if (strlen(documento_completo) > 0) {
         int max_frecuencia_total = -1;
         int indice_ganador = -1;
@@ -165,7 +153,6 @@ void *atender_ventana(void *socket_desc) {
             token = strtok(NULL, " \n\r\t.,;:");
         }
 
-        // C. Aplicación de Reglas (Validación de 3 palabras y desempate por prioridad)
         for (int i = 0; i < MAX_DICCIONARIOS; i++) {
             int palabras_distintas = 0;
             int suma_frecuencia = 0;
@@ -175,54 +162,47 @@ void *atender_ventana(void *socket_desc) {
                     suma_frecuencia += frec_palabras[i][j];
                 }
             }
-
             if (palabras_distintas >= 3) {
                 if (suma_frecuencia > max_frecuencia_total) {
                     max_frecuencia_total = suma_frecuencia;
                     indice_ganador = i;
                 } else if (suma_frecuencia == max_frecuencia_total && i > indice_ganador) {
-                    indice_ganador = i; // Desempate por jerarquía de prioridad
+                    indice_ganador = i;
                 }
             }
         }
 
-        // D. Actualización segura del contador global
         if (indice_ganador != -1) {
+            printf("[P%s] CLASIFICACIÓN FINAL: %s\n", id_proceso, diccionarios[indice_ganador].clase);
             pthread_mutex_lock(&stats.lock);
             stats.total_documentos++;
             if (indice_ganador == 0) stats.correos++;
             else if (indice_ganador == 1) stats.cientificos++;
             else if (indice_ganador == 2) stats.reportes++;
             pthread_mutex_unlock(&stats.lock);
+        } else {
+            printf("[P%s] CLASIFICACIÓN: Indeterminado.\n", id_proceso);
         }
     }
-
     close(sock);
-    free(socket_desc);
     return NULL;
 }
-
-// ==============================================================================
-// BLOQUE 5: INICIALIZACIÓN DEL SERVIDOR (MAIN)
-// ==============================================================================
 
 int main() {
     cargar_diccionarios();
     FILE *archivo = fopen("config.txt", "r");
+    if (!archivo) exit(EXIT_FAILURE);
     char puerto_str[20];
     fgets(puerto_str, sizeof(puerto_str), archivo);
     fclose(archivo);
     int puerto_config = atoi(puerto_str);
 
-    int server_fd, new_socket;
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
-
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)); // Reciclaje inmediato
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    signal(SIGINT, handle_sigint); // Registro de cierre seguro
+    signal(SIGINT, handle_sigint);
+    struct sockaddr_in address;
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(puerto_config);
@@ -230,14 +210,18 @@ int main() {
     bind(server_fd, (struct sockaddr *)&address, sizeof(address));
     listen(server_fd, 10);
 
+    printf("[IALearner] Escuchando en puerto %d...\n", puerto_config);
+
     while (1) {
-        new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
-        pthread_t thread_id;
+        int new_socket = accept(server_fd, NULL, NULL);
         int *new_sock = malloc(sizeof(int));
         *new_sock = new_socket;
-        
-        if (pthread_create(&thread_id, NULL, atender_ventana, (void*) new_sock) < 0) free(new_sock);
-        pthread_detach(thread_id); // Liberación automática de recursos
+        pthread_t thread_id;
+        if (pthread_create(&thread_id, NULL, atender_ventana, new_sock) == 0) {
+            pthread_detach(thread_id);
+        } else {
+            free(new_sock);
+        }
     }
     return 0;
 }
