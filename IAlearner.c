@@ -4,10 +4,27 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <pthread.h> // para concurrencia
-#include <ctype.h>   // NUEVA LIBRERÍA para manejo de caracteres
+#include <ctype.h>   // manejo de caracteres
 #include <strings.h>
 #include <signal.h>
 
+// PARA LAS P ORACIONEES
+pthread_mutex_t mutex_queue = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond_loader = PTHREAD_COND_INITIALIZER; // Despierta al Loader o a los detectores
+pthread_cond_t cond_detectores = PTHREAD_COND_INITIALIZER;
+int P_param; // Parámetro P ingresado por consola
+
+// COLAS DE ORACIONES COMPARTIDAS
+#define MAX_QUEUE_SIZE 1000
+typedef struct
+{
+    char sentence[256];
+    int client_id; // Para saber a qué contexto/computador pertenece
+} SentenceNode;
+SentenceNode sentence_queue[MAX_QUEUE_SIZE];
+int queue_count = 0;
+
+// NORMAL
 int comparar_palabras(const void *a, const void *b)
 {
     // strcasecmp compara dos textos ignorando si son mayúsculas o minúsculas
@@ -18,17 +35,16 @@ int comparar_palabras(const void *a, const void *b)
 #define MAX_DICCIONARIOS 3
 #define MAX_PALABRAS 20
 
-// Creamos el "molde" de lo que es un Diccionario
+// DICCIONARIO
 typedef struct
 {
     char clase[50];
     char palabras[MAX_PALABRAS][50];
     int total_palabras;
 } Diccionario;
-
-// Arreglo global para guardar los 3 diccionarios en memoria
 Diccionario diccionarios[MAX_DICCIONARIOS];
 
+// USUARIO
 typedef struct
 {
     int correos;
@@ -37,10 +53,164 @@ typedef struct
     int total_documentos;
     pthread_mutex_t lock; // Candado para que los hilos no choquen
 } EstadisticasUsuario;
-
 EstadisticasUsuario stats = {0, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
 
-// Función para imprimir y verificar la memoria de los diccionarios ---
+// --- HILO LOADER: Espera a que haya P oraciones y da la orden ---
+void *hilo_loader(void *arg)
+{
+    while (1)
+    {
+        pthread_mutex_lock(&mutex_queue);
+
+        // Mientras la cola tenga menos de P oraciones, el Loader duerme
+        while (queue_count < P_param)
+        {
+            pthread_cond_wait(&cond_loader, &mutex_queue);
+        }
+
+        // Cuando se alcanzan P oraciones, despierta a los P detectores en paralelo
+        pthread_cond_broadcast(&cond_detectores);
+
+        pthread_mutex_unlock(&mutex_queue);
+        usleep(100000); // Pequeño respiro
+    }
+    return NULL;
+}
+
+// --- POOL DE HILOS DETECTORES: Procesan en paralelo el Bag of Words ---
+void *hilo_detector(void *arg)
+{
+    char mi_oracion[256];
+    int mi_client_id;
+
+    while (1)
+    {
+        pthread_mutex_lock(&mutex_queue);
+
+        // Los hilos detectores esperan a que el Loader los reactive
+        while (queue_count < P_param)
+        {
+            pthread_cond_wait(&cond_detectores, &mutex_queue);
+        }
+
+        // Sacan una oración de la cola compartida
+        queue_count--;
+        strcpy(mi_oracion, sentence_queue[queue_count].sentence);
+        mi_client_id = sentence_queue[queue_count].client_id;
+
+        pthread_mutex_unlock(&mutex_queue);
+
+        // --- FASE DE CLASIFICACIÓN (Bag of Words por Oración) ---
+        if (strlen(mi_oracion) > 0)
+        {
+            // RETROALDIRECCIÓN EN PANTALLA: Avisamos que el hilo comenzó el análisis
+            printf("\n=========================================\n");
+            printf("[Detector Thread] [P%d] Analizando oración: \"%s\"\n", mi_client_id, mi_oracion);
+            printf("[DEBUG] Tokens extraídos de la oración:\n");
+
+            int max_frecuencia_total = -1;
+            int indice_ganador = -1;
+            int frec_palabras[MAX_DICCIONARIOS][MAX_PALABRAS] = {0};
+
+            // PASO A: TOKENIZACIÓN CLÁSICA (usando mi_oracion)
+            char *token = strtok(mi_oracion, " \n\r\t.,;:");
+
+            while (token != NULL)
+            {
+                // Mostramos cada palabra evaluada (Tus Rayos X)
+                printf("  -> Evaluando palabra: '%s'\n", token);
+
+                // PASO B: BÚSQUEDA ROBUSTA (bsearch)
+                for (int i = 0; i < MAX_DICCIONARIOS; i++)
+                {
+                    char *encontrado = (char *)bsearch(
+                        token,
+                        diccionarios[i].palabras,
+                        diccionarios[i].total_palabras,
+                        sizeof(diccionarios[i].palabras[0]),
+                        comparar_palabras);
+
+                    if (encontrado != NULL)
+                    {
+                        // Retroalimentación de match exacto
+                        printf("    [!] MATCH ENCONTRADO: '%s' pertenece a la clase '%s'\n", token, diccionarios[i].clase);
+
+                        int j = (encontrado - (char *)diccionarios[i].palabras) / sizeof(diccionarios[i].palabras[0]);
+                        frec_palabras[i][j]++;
+                        break; // Salimos al hallar coincidencia
+                    }
+                }
+                token = strtok(NULL, " \n\r\t.,;:");
+            }
+
+            // PASO C: APLICAR REGLAS ESTRICTAS DE LA RÚBRICA
+            for (int i = 0; i < MAX_DICCIONARIOS; i++)
+            {
+                int palabras_distintas = 0;
+                int suma_frecuencia = 0;
+
+                for (int j = 0; j < diccionarios[i].total_palabras; j++)
+                {
+                    if (frec_palabras[i][j] > 0)
+                    {
+                        palabras_distintas++;
+                        suma_frecuencia += frec_palabras[i][j];
+                    }
+                }
+
+                // REGLA 1: Mínimo 3 palabras distintas
+                if (palabras_distintas >= 3)
+                {
+                    // REGLA 2: Lógica de Prioridad y Desempate
+                    if (suma_frecuencia > max_frecuencia_total)
+                    {
+                        max_frecuencia_total = suma_frecuencia;
+                        indice_ganador = i;
+                    }
+                    else if (suma_frecuencia == max_frecuencia_total && indice_ganador != -1)
+                    {
+                        if (i > indice_ganador)
+                        {
+                            indice_ganador = i;
+                        }
+                    }
+                }
+            }
+
+            // Sección crítica para actualizar las estadísticas globales de forma segura
+            pthread_mutex_lock(&stats.lock);
+            stats.total_documentos++;
+            if (indice_ganador != -1)
+            {
+                printf("[Detector Thread] [P%d] CLASIFICACIÓN: Oración de clase -> ** %s **\n",
+                       mi_client_id, diccionarios[indice_ganador].clase);
+
+                if (indice_ganador == 0)
+                    stats.correos++;
+                else if (indice_ganador == 1)
+                    stats.cientificos++;
+                else if (indice_ganador == 2)
+                    stats.reportes++;
+            }
+            else
+            {
+                printf("[Detector Thread] [P%d] CLASIFICACIÓN: Indeterminado (< 3 palabras clave).\n", mi_client_id);
+            }
+            pthread_mutex_unlock(&stats.lock);
+            printf("=========================================\n");
+
+            // --- NUEVO REQUERIMIENTO (e): Inferencia de usuario asincrónica en tiempo real ---
+            determinar_tipo_usuario();
+        }
+        else
+        {
+            printf("[Detector Thread] [P%d] Oración vacía. Nada que analizar.\n", mi_client_id);
+        }
+    }
+    return NULL;
+}
+
+// imprimir y verificar la memoria de los diccionarios=
 void imprimir_diccionarios_cargados()
 {
     printf("\n=== RADIOGRAFÍA DE LOS DICCIONARIOS EN MEMORIA ===\n");
@@ -63,7 +233,7 @@ void imprimir_diccionarios_cargados()
     printf("==================================================\n\n");
 }
 
-// Función para cargar diccionarios dinámicamente ---
+// cargar diccionarios dinámicamente ---
 void cargar_diccionarios()
 {
     FILE *archivo = fopen("diccionarios.txt", "r");
@@ -154,6 +324,7 @@ void determinar_tipo_usuario()
     pthread_mutex_unlock(&stats.lock);
 }
 
+// SALIR DEL SERVIDOR
 void handle_sigint(int sig)
 {
     printf("\n[IALearner] Apagando servidor... ejecutando inferencia final.\n");
@@ -183,13 +354,29 @@ void *atender_ventana(void *socket_desc)
 
             if (strcmp(tecla, "Return") == 0)
             {
-                // Si aplasta Enter y la oración tiene texto, la guardamos
                 if (strlen(oracion) > 0)
                 {
                     printf("\n[Data Center] [P%s] Oración completada: %s\n", id_proceso, oracion);
-                    strcat(documento_completo, oracion);
-                    strcat(documento_completo, " ");     // Añadimos espacio entre oraciones
-                    memset(oracion, 0, sizeof(oracion)); // Limpiamos para la siguiente
+                    pthread_mutex_lock(&mutex_queue);
+
+                    if (queue_count < MAX_QUEUE_SIZE)
+                    {
+                        strcpy(sentence_queue[queue_count].sentence, oracion);
+                        sentence_queue[queue_count].client_id = atoi(id_proceso);
+                        queue_count++;
+
+                        printf("[Data Center] [P%s] Oración agregada a cola. Total en cola: %d/%d\n",
+                               id_proceso, queue_count, P_param);
+
+                        // Si ya juntamos P oraciones, despertamos al Loader
+                        if (queue_count >= P_param)
+                        {
+                            pthread_cond_signal(&cond_loader);
+                        }
+                    }
+
+                    pthread_mutex_unlock(&mutex_queue);
+                    memset(oracion, 0, sizeof(oracion)); // Limpiar para la siguiente oración
                 }
             }
             else if (strcmp(tecla, "space") == 0)
@@ -207,123 +394,38 @@ void *atender_ventana(void *socket_desc)
         memset(buffer, 0, sizeof(buffer));
     }
 
-    // --- 2. FASE DE CLASIFICACIÓN (Bag of Words) ---
-    // Esto se ejecuta únicamente cuando el usuario cierra la ventana gráfica
-    printf("\n=========================================\n");
-    printf("[Data Center] Ventana P%s cerrada. Iniciando análisis...\n", id_proceso);
-
-    if (strlen(documento_completo) > 0)
-    {
-        int max_frecuencia_total = -1;
-        int indice_ganador = -1;
-        int frec_palabras[MAX_DICCIONARIOS][MAX_PALABRAS] = {0};
-
-        printf("[DEBUG] Tokens extraídos del documento:\n");
-
-        // PASO A: TOKENIZACIÓN CLÁSICA
-        char *token = strtok(documento_completo, " \n\r\t.,;:");
-
-        while (token != NULL)
-        {
-            printf("  -> Evaluando palabra: '%s'\n", token); // RAYOS X
-
-            // PASO B: BÚSQUEDA ROBUSTA
-            for (int i = 0; i < MAX_DICCIONARIOS; i++)
-            {
-                // Búsqueda Binaria optimizada
-                char *encontrado = (char *)bsearch(
-                    token,
-                    diccionarios[i].palabras,
-                    diccionarios[i].total_palabras,
-                    sizeof(diccionarios[i].palabras[0]),
-                    comparar_palabras);
-
-                // Si bsearch encuentra la palabra, calcula su posición exacta y suma frecuencia
-                if (encontrado != NULL)
-                {
-                    printf("    [!] MATCH ENCONTRADO: '%s' pertenece a la clase '%s'\n", token, diccionarios[i].clase);
-                    int j = (encontrado - (char *)diccionarios[i].palabras) / sizeof(diccionarios[i].palabras[0]);
-                    frec_palabras[i][j]++;
-                    break; // Rompe el ciclo de diccionarios al hallar coincidencia y pasa al siguiente token
-                }
-            }
-            token = strtok(NULL, " \n\r\t.,;:");
-        }
-
-        // PASO C: APLICAR REGLAS ESTRICTAS DE LA RÚBRICA
-        for (int i = 0; i < MAX_DICCIONARIOS; i++)
-        {
-            int palabras_distintas = 0;
-            int suma_frecuencia = 0;
-
-            for (int j = 0; j < diccionarios[i].total_palabras; j++)
-            {
-                if (frec_palabras[i][j] > 0)
-                {
-                    palabras_distintas++;
-                    suma_frecuencia += frec_palabras[i][j];
-                }
-            }
-
-            // REGLA 1: Debe cumplir el mínimo de 3 palabras distintas
-            if (palabras_distintas >= 3)
-            {
-                // REGLA 2: Lógica de Prioridad y Desempate
-                if (suma_frecuencia > max_frecuencia_total)
-                {
-                    max_frecuencia_total = suma_frecuencia;
-                    indice_ganador = i;
-                }
-                // AQUÍ ESTÁ EL DESEMPATE POR PRIORIDAD:
-                // Si la frecuencia es igual, mantenemos el que tiene mayor prioridad.
-                // Asumimos que tu archivo diccionarios.txt está en orden:
-                // 0: Correo, 1: Científico, 2: Reporte.
-                else if (suma_frecuencia == max_frecuencia_total && indice_ganador != -1)
-                {
-                    // Si el nuevo 'i' es mayor, tiene mayor prioridad (Reporte > Científico > Correo)
-                    if (i > indice_ganador)
-                    {
-                        indice_ganador = i;
-                    }
-                }
-            }
-        }
-
-        if (indice_ganador != -1)
-        {
-            printf("[P%s] CLASIFICACIÓN: Este documento es de clase -> ** %s **\n",
-                   id_proceso, diccionarios[indice_ganador].clase);
-            pthread_mutex_lock(&stats.lock);
-            stats.total_documentos++;
-            if (indice_ganador == 0)
-                stats.correos++; // 0 = Correo
-            else if (indice_ganador == 1)
-                stats.cientificos++; // 1 = Científico
-            else if (indice_ganador == 2)
-                stats.reportes++; // 2 = Reporte
-            pthread_mutex_unlock(&stats.lock);
-        }
-        else
-        {
-            printf("[P%s] CLASIFICACIÓN: Indeterminado (No cumple el mínimo de 3 palabras clave).\n", id_proceso);
-        }
-    }
-    else
-    {
-        printf("[P%s] Documento vacío. Nada que analizar.\n", id_proceso);
-    }
-    printf("=========================================\n");
-
-    // --- 3. LIMPIEZA DE MEMORIA Y RED ---
     close(sock);
     free(socket_desc);
     return NULL;
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    if (argc < 2)
+    {
+        printf("[-] Error: Debe ingresar el parámetro P.\n");
+        printf("Uso correcto: %s <P>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+    P_param = atoi(argv[1]);
+    printf("[IALearner] Parámetro P configurado a: %d\n", P_param);
+
     cargar_diccionarios();
     imprimir_diccionarios_cargados();
+
+    // --- NUEVO: Arrancar el hilo Loader y el pool de P hilos detectores ---
+    pthread_t loader_thread;
+    pthread_create(&loader_thread, NULL, hilo_loader, NULL);
+    pthread_detach(loader_thread);
+
+    for (int i = 0; i < P_param; i++)
+    {
+        pthread_t detector_thread;
+        pthread_create(&detector_thread, NULL, hilo_detector, NULL);
+        pthread_detach(detector_thread);
+    }
+    printf("[IALearner] Pool de %d hilos detectores e hilo Loader iniciados.\n", P_param);
+    // normal anterior proyecto
     FILE *archivo = fopen("config.txt", "r");
     if (archivo == NULL)
     {
