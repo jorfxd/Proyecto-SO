@@ -77,6 +77,122 @@ void *hilo_loader(void *arg)
     return NULL;
 }
 
+
+
+// imprimir y verificar la memoria de los diccionarios=
+void imprimir_diccionarios_cargados()
+{
+    printf("\n=== RADIOGRAFÍA DE LOS DICCIONARIOS EN MEMORIA ===\n");
+    for (int i = 0; i < MAX_DICCIONARIOS; i++)
+    {
+        // Solo imprimimos si la clase tiene un nombre válido
+        if (strlen(diccionarios[i].clase) > 0)
+        {
+            printf("-> Clase: '%s' (Contiene %d palabras clave)\n", diccionarios[i].clase, diccionarios[i].total_palabras);
+            printf("   Palabras en memoria: ");
+
+            // Recorremos y mostramos cada palabra exacta que se guardó
+            for (int j = 0; j < diccionarios[i].total_palabras; j++)
+            {
+                printf("[%s] ", diccionarios[i].palabras[j]);
+            }
+            printf("\n");
+        }
+    }
+    printf("==================================================\n\n");
+}
+
+// cargar diccionarios dinámicamente ---
+void cargar_diccionarios()
+{
+    FILE *archivo = fopen("diccionarios.txt", "r");
+    if (!archivo)
+    {
+        perror("[-] Error: No se encontró diccionarios.txt");
+        exit(EXIT_FAILURE);
+    }
+
+    char linea[512];
+    int i = 0;
+    while (fgets(linea, sizeof(linea), archivo) && i < MAX_DICCIONARIOS)
+    {
+        linea[strcspn(linea, "\n")] = 0; // Limpiar salto de línea (\n)
+
+        char *clase = strtok(linea, ":");
+        if (!clase)
+            continue; // Protección extra
+        strcpy(diccionarios[i].clase, clase);
+
+        char *palabras_str = strtok(NULL, ":");
+        if (!palabras_str)
+            continue;
+
+        // Agregamos un espacio en blanco ' ' y un retorno de carro '\r' a los delimitadores.
+        // Esto purifica la palabra y elimina cualquier basura invisible del .txt
+        char *palabra = strtok(palabras_str, ", \r\t");
+
+        int j = 0;
+        while (palabra != NULL && j < MAX_PALABRAS)
+        {
+            strcpy(diccionarios[i].palabras[j], palabra);
+
+            // Usamos los mismos delimitadores estrictos para la siguiente palabra
+            palabra = strtok(NULL, ", \r\t");
+            j++;
+        }
+        diccionarios[i].total_palabras = j;
+
+        // Ordenamos el diccionario alfabéticamente para la Búsqueda Binaria
+        qsort(diccionarios[i].palabras, diccionarios[i].total_palabras, 50, comparar_palabras);
+
+        i++;
+    }
+    fclose(archivo);
+    printf("[+] Diccionarios cargados, LIMPIOS y ordenados exitosamente.\n");
+}
+
+void determinar_tipo_usuario()
+{
+    pthread_mutex_lock(&stats.lock);
+    int total = stats.total_documentos;
+
+    if (total == 0)
+    {
+        printf("\n[!] No hay suficientes datos para inferir el tipo de usuario.\n");
+        pthread_mutex_unlock(&stats.lock);
+        return;
+    }
+
+    float prop_correo = (float)stats.correos / total;
+    float prop_cient = (float)stats.cientificos / total;
+    float prop_reporte = (float)stats.reportes / total;
+
+    printf("\n=========================================\n");
+    printf("[IALearner] Análisis Final de Usuario:\n");
+    printf("Proporciones: Correo: %.2f, Científico: %.2f, Reporte: %.2f\n", prop_correo, prop_cient, prop_reporte);
+
+    // Lógica de tabla de referencia
+    if (prop_correo > 0.5 && prop_reporte > 0.3)
+    {
+        printf("[!] Usuario detectado: Personal administrativo\n");
+    }
+    else if (prop_correo > 0.4 && prop_reporte > 0.4)
+    {
+        printf("[!] Usuario detectado: Personal técnico\n");
+    }
+    else if (prop_correo > 0.3 && prop_cient > 0.4)
+    {
+        printf("[!] Usuario detectado: Profesor\n");
+    }
+    else
+    {
+        printf("[!] Usuario detectado: Estudiante\n");
+    }
+    printf("=========================================\n");
+
+    pthread_mutex_unlock(&stats.lock);
+}
+
 // --- POOL DE HILOS DETECTORES: Procesan en paralelo el Bag of Words ---
 void *hilo_detector(void *arg)
 {
@@ -210,120 +326,6 @@ void *hilo_detector(void *arg)
     return NULL;
 }
 
-// imprimir y verificar la memoria de los diccionarios=
-void imprimir_diccionarios_cargados()
-{
-    printf("\n=== RADIOGRAFÍA DE LOS DICCIONARIOS EN MEMORIA ===\n");
-    for (int i = 0; i < MAX_DICCIONARIOS; i++)
-    {
-        // Solo imprimimos si la clase tiene un nombre válido
-        if (strlen(diccionarios[i].clase) > 0)
-        {
-            printf("-> Clase: '%s' (Contiene %d palabras clave)\n", diccionarios[i].clase, diccionarios[i].total_palabras);
-            printf("   Palabras en memoria: ");
-
-            // Recorremos y mostramos cada palabra exacta que se guardó
-            for (int j = 0; j < diccionarios[i].total_palabras; j++)
-            {
-                printf("[%s] ", diccionarios[i].palabras[j]);
-            }
-            printf("\n");
-        }
-    }
-    printf("==================================================\n\n");
-}
-
-// cargar diccionarios dinámicamente ---
-void cargar_diccionarios()
-{
-    FILE *archivo = fopen("diccionarios.txt", "r");
-    if (!archivo)
-    {
-        perror("[-] Error: No se encontró diccionarios.txt");
-        exit(EXIT_FAILURE);
-    }
-
-    char linea[512];
-    int i = 0;
-    while (fgets(linea, sizeof(linea), archivo) && i < MAX_DICCIONARIOS)
-    {
-        linea[strcspn(linea, "\n")] = 0; // Limpiar salto de línea (\n)
-
-        char *clase = strtok(linea, ":");
-        if (!clase)
-            continue; // Protección extra
-        strcpy(diccionarios[i].clase, clase);
-
-        char *palabras_str = strtok(NULL, ":");
-        if (!palabras_str)
-            continue;
-
-        // Agregamos un espacio en blanco ' ' y un retorno de carro '\r' a los delimitadores.
-        // Esto purifica la palabra y elimina cualquier basura invisible del .txt
-        char *palabra = strtok(palabras_str, ", \r\t");
-
-        int j = 0;
-        while (palabra != NULL && j < MAX_PALABRAS)
-        {
-            strcpy(diccionarios[i].palabras[j], palabra);
-
-            // Usamos los mismos delimitadores estrictos para la siguiente palabra
-            palabra = strtok(NULL, ", \r\t");
-            j++;
-        }
-        diccionarios[i].total_palabras = j;
-
-        // Ordenamos el diccionario alfabéticamente para la Búsqueda Binaria
-        qsort(diccionarios[i].palabras, diccionarios[i].total_palabras, 50, comparar_palabras);
-
-        i++;
-    }
-    fclose(archivo);
-    printf("[+] Diccionarios cargados, LIMPIOS y ordenados exitosamente.\n");
-}
-
-void determinar_tipo_usuario()
-{
-    pthread_mutex_lock(&stats.lock);
-    int total = stats.total_documentos;
-
-    if (total == 0)
-    {
-        printf("\n[!] No hay suficientes datos para inferir el tipo de usuario.\n");
-        pthread_mutex_unlock(&stats.lock);
-        return;
-    }
-
-    float prop_correo = (float)stats.correos / total;
-    float prop_cient = (float)stats.cientificos / total;
-    float prop_reporte = (float)stats.reportes / total;
-
-    printf("\n=========================================\n");
-    printf("[IALearner] Análisis Final de Usuario:\n");
-    printf("Proporciones: Correo: %.2f, Científico: %.2f, Reporte: %.2f\n", prop_correo, prop_cient, prop_reporte);
-
-    // Lógica de tabla de referencia
-    if (prop_correo > 0.5 && prop_reporte > 0.3)
-    {
-        printf("[!] Usuario detectado: Personal administrativo\n");
-    }
-    else if (prop_correo > 0.4 && prop_reporte > 0.4)
-    {
-        printf("[!] Usuario detectado: Personal técnico\n");
-    }
-    else if (prop_correo > 0.3 && prop_cient > 0.4)
-    {
-        printf("[!] Usuario detectado: Profesor\n");
-    }
-    else
-    {
-        printf("[!] Usuario detectado: Estudiante\n");
-    }
-    printf("=========================================\n");
-
-    pthread_mutex_unlock(&stats.lock);
-}
-
 // SALIR DEL SERVIDOR
 void handle_sigint(int sig)
 {
@@ -339,7 +341,7 @@ void *atender_ventana(void *socket_desc)
     char buffer[1024] = {0};
 
     char oracion[2048] = {0};
-    char documento_completo[8192] = {0}; // Almacena Todo lo que el usuario escribió
+    // char documento_completo[8192] = {0}; Almacena Todo lo que el usuario escribió
     char id_proceso[20] = {0};
     int valread;
 
