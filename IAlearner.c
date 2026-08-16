@@ -77,8 +77,6 @@ void *hilo_loader(void *arg)
     return NULL;
 }
 
-
-
 // imprimir y verificar la memoria de los diccionarios=
 void imprimir_diccionarios_cargados()
 {
@@ -211,8 +209,10 @@ void *hilo_detector(void *arg)
 
         // Sacan una oración de la cola compartida
         queue_count--;
-        strcpy(mi_oracion, sentence_queue[queue_count].sentence);
-        mi_client_id = sentence_queue[queue_count].client_id;
+        int index_a_procesar = queue_count;
+
+        strcpy(mi_oracion, sentence_queue[index_a_procesar].sentence);
+        mi_client_id = sentence_queue[index_a_procesar].client_id;
 
         pthread_mutex_unlock(&mutex_queue);
 
