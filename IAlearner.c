@@ -247,7 +247,7 @@ void *hilo_detector(void *arg)
         pthread_mutex_lock(&mutex_queue);
 
         // Los hilos detectores esperan a que el Loader los reactive
-        while (queue_count < P_param)
+        while (queue_count == 0)
         {
             pthread_cond_wait(&cond_detectores, &mutex_queue);
         }
