@@ -10,6 +10,7 @@
 
 // PARA LAS P ORACIONEES
 pthread_mutex_t mutex_queue = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t stdout_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond_loader = PTHREAD_COND_INITIALIZER; // Despierta al Loader o a los detectores
 pthread_cond_t cond_detectores = PTHREAD_COND_INITIALIZER;
 int P_param; // Parámetro P ingresado por consola
@@ -267,6 +268,7 @@ void *hilo_detector(void *arg)
         if (strlen(mi_oracion) > 0)
         {
             // RETROALDIRECCIÓN EN PANTALLA: Avisamos que el hilo comenzó el análisis
+            pthread_mutex_lock(&stdout_mutex);
             printf("\n=========================================\n");
             printf("[Detector Thread] [P%d] Analizando oración: \"%s\"\n", mi_client_id, mi_oracion);
             printf("[DEBUG] Tokens extraídos de la oración:\n");
@@ -362,6 +364,7 @@ void *hilo_detector(void *arg)
                 }
                 pthread_mutex_unlock(&comp->lock);
                 printf("=========================================\n");
+                pthread_mutex_unlock(&stdout_mutex);
 
                 // Inferencia de usuario asincrónica aislada exclusivamente para este Computador
                 determinar_tipo_usuario(comp);
@@ -412,7 +415,9 @@ void *atender_ventana(void *socket_desc)
             {
                 if (strlen(oracion) > 0)
                 {
+                    pthread_mutex_lock(&stdout_mutex);
                     printf("\n[Data Center] [P%s] Oración completada: %s\n", id_proceso, oracion);
+                    pthread_mutex_unlock(&stdout_mutex);
                     pthread_mutex_lock(&mutex_queue);
 
                     if (queue_count < MAX_QUEUE_SIZE)
@@ -421,8 +426,10 @@ void *atender_ventana(void *socket_desc)
                         sentence_queue[queue_count].client_id = atoi(id_proceso);
                         queue_count++;
 
+                        pthread_mutex_lock(&stdout_mutex);
                         printf("[Data Center] [P%s] Oración agregada a cola. Total en cola: %d/%d\n",
                                id_proceso, queue_count, P_param);
+                        pthread_mutex_unlock(&stdout_mutex);
 
                         // Si ya juntamos P oraciones, despertamos al Loader
                         if (queue_count >= P_param)
