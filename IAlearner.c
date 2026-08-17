@@ -55,6 +55,51 @@ typedef struct
 } EstadisticasUsuario;
 EstadisticasUsuario stats = {0, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
 
+#define MAX_COMPUTADORAS 50 // Número máximo de computadoras
+typedef struct {
+    int computador_id;          // ID del Launcher/pc
+    int correos;
+    int cientificos;
+    int reportes;
+    int total_documentos;
+    pthread_mutex_t lock;       // Candado exclusivo para este computador
+} ContextoComputador;
+ContextoComputador contextos_computadoras[MAX_COMPUTADORAS];
+int total_computadoras_registradas = 0;
+pthread_mutex_t mutex_tabla_computadoras = PTHREAD_MUTEX_INITIALIZER;
+
+// Función para obtener o crear el contexto exclusivo de esa computadora
+ContextoComputador *obtener_o_crear_contexto_computador(int comp_id)
+{
+    pthread_mutex_lock(&mutex_tabla_computadoras);
+    for (int i = 0; i < total_computadoras_registradas; i++)
+    {
+        if (contextos_computadoras[i].computador_id == comp_id)
+        {
+            pthread_mutex_unlock(&mutex_tabla_computadoras);
+            return &contextos_computadoras[i];
+        }
+    }
+
+    // Si la computadora no existe en la memoria del servidor, se registra una nueva
+    if (total_computadoras_registradas < MAX_COMPUTADORAS)
+    {
+        int idx = total_computadoras_registradas++;
+        contextos_computadoras[idx].computador_id = comp_id;
+        contextos_computadoras[idx].correos = 0;
+        contextos_computadoras[idx].cientificos = 0;
+        contextos_computadoras[idx].reportes = 0;
+        contextos_computadoras[idx].total_documentos = 0;
+        pthread_mutex_init(&contextos_computadoras[idx].lock, NULL);
+
+        pthread_mutex_unlock(&mutex_tabla_computadoras);
+        return &contextos_computadoras[idx];
+    }
+
+    pthread_mutex_unlock(&mutex_tabla_computadoras);
+    return NULL;
+}
+
 // --- HILO LOADER: Espera a que haya P oraciones y da la orden ---
 void *hilo_loader(void *arg)
 {
@@ -68,11 +113,11 @@ void *hilo_loader(void *arg)
             pthread_cond_wait(&cond_loader, &mutex_queue);
         }
 
-        // Cuando se alcanzan P oraciones, despierta a los P detectores en paralelo
+        // Despertamos a los hilos detectores para que procesen en lote
         pthread_cond_broadcast(&cond_detectores);
 
         pthread_mutex_unlock(&mutex_queue);
-        usleep(100000); // Pequeño respiro
+        usleep(100000); 
     }
     return NULL;
 }
@@ -149,46 +194,45 @@ void cargar_diccionarios()
     printf("[+] Diccionarios cargados, LIMPIOS y ordenados exitosamente.\n");
 }
 
-void determinar_tipo_usuario()
+void determinar_tipo_usuario(ContextoComputador *comp)
 {
-    pthread_mutex_lock(&stats.lock);
-    int total = stats.total_documentos;
+    pthread_mutex_lock(&comp->lock);
+    int total = comp->total_documentos;
 
     if (total == 0)
     {
-        printf("\n[!] No hay suficientes datos para inferir el tipo de usuario.\n");
-        pthread_mutex_unlock(&stats.lock);
+        pthread_mutex_unlock(&comp->lock);
         return;
     }
 
-    float prop_correo = (float)stats.correos / total;
-    float prop_cient = (float)stats.cientificos / total;
-    float prop_reporte = (float)stats.reportes / total;
+    float prop_correo = (float)comp->correos / total;
+    float prop_cient = (float)comp->cientificos / total;
+    float prop_reporte = (float)comp->reportes / total;
 
     printf("\n=========================================\n");
-    printf("[IALearner] Análisis Final de Usuario:\n");
-    printf("Proporciones: Correo: %.2f, Científico: %.2f, Reporte: %.2f\n", prop_correo, prop_cient, prop_reporte);
+    printf("[IALearner] Análisis Asincrónico de Usuario [Computador/Launcher P%d]:\n", comp->computador_id);
+    printf("Proporciones -> Correo: %.2f, Científico: %.2f, Reporte: %.2f\n", prop_correo, prop_cient, prop_reporte);
 
-    // Lógica de tabla de referencia
+    // Lógica de la tabla de referencia de la rúbrica
     if (prop_correo > 0.5 && prop_reporte > 0.3)
     {
-        printf("[!] Usuario detectado: Personal administrativo\n");
+        printf("[!] Usuario en Computador P%d detectado: Personal administrativo\n", comp->computador_id);
     }
     else if (prop_correo > 0.4 && prop_reporte > 0.4)
     {
-        printf("[!] Usuario detectado: Personal técnico\n");
+        printf("[!] Usuario en Computador P%d detectado: Personal técnico\n", comp->computador_id);
     }
     else if (prop_correo > 0.3 && prop_cient > 0.4)
     {
-        printf("[!] Usuario detectado: Profesor\n");
+        printf("[!] Usuario en Computador P%d detectado: Profesor\n", comp->computador_id);
     }
     else
     {
-        printf("[!] Usuario detectado: Estudiante\n");
+        printf("[!] Usuario en Computador P%d detectado: Estudiante\n", comp->computador_id);
     }
     printf("=========================================\n");
 
-    pthread_mutex_unlock(&stats.lock);
+    pthread_mutex_unlock(&comp->lock);
 }
 
 // --- POOL DE HILOS DETECTORES: Procesan en paralelo el Bag of Words ---
@@ -207,13 +251,16 @@ void *hilo_detector(void *arg)
             pthread_cond_wait(&cond_detectores, &mutex_queue);
         }
 
-        // Sacan una oración de la cola compartida
-        queue_count--;
-        int index_a_procesar = queue_count;
+        // --- EXTRACCIÓN FIFO SEGURA (Índice 0) ---
+        strcpy(mi_oracion, sentence_queue[0].sentence);
+        mi_client_id = sentence_queue[0].client_id;
 
-        strcpy(mi_oracion, sentence_queue[index_a_procesar].sentence);
-        mi_client_id = sentence_queue[index_a_procesar].client_id;
-
+        // Desplazamos los elementos restantes en la cola hacia la izquierda
+        for (int i = 0; i < queue_count - 1; i++)
+        {
+            sentence_queue[i] = sentence_queue[i + 1];
+        }
+        queue_count--; // Reducimos el contador de la cola de forma segura
         pthread_mutex_unlock(&mutex_queue);
 
         // --- FASE DE CLASIFICACIÓN (Bag of Words por Oración) ---
@@ -293,30 +340,32 @@ void *hilo_detector(void *arg)
                 }
             }
 
-            // Sección crítica para actualizar las estadísticas globales de forma segura
-            pthread_mutex_lock(&stats.lock);
-            stats.total_documentos++;
-            if (indice_ganador != -1)
-            {
-                printf("[Detector Thread] [P%d] CLASIFICACIÓN: Oración de clase -> ** %s **\n",
-                       mi_client_id, diccionarios[indice_ganador].clase);
+            // --- NUEVO: Mapeo al contexto independiente de la Computadora/Launcher ---
+            ContextoComputador *comp = obtener_o_crear_contexto_computador(mi_client_id);
 
-                if (indice_ganador == 0)
-                    stats.correos++;
-                else if (indice_ganador == 1)
-                    stats.cientificos++;
-                else if (indice_ganador == 2)
-                    stats.reportes++;
-            }
-            else
+            if (comp != NULL)
             {
-                printf("[Detector Thread] [P%d] CLASIFICACIÓN: Indeterminado (< 3 palabras clave).\n", mi_client_id);
-            }
-            pthread_mutex_unlock(&stats.lock);
-            printf("=========================================\n");
+                pthread_mutex_lock(&comp->lock);
+                comp->total_documentos++;
+                if (indice_ganador != -1)
+                {
+                    printf("[Detector Thread] [Computador P%d] CLASIFICACIÓN: Oración de clase -> ** %s **\n",
+                           mi_client_id, diccionarios[indice_ganador].clase);
 
-            // --- NUEVO REQUERIMIENTO (e): Inferencia de usuario asincrónica en tiempo real ---
-            determinar_tipo_usuario();
+                    if (indice_ganador == 0) comp->correos++;
+                    else if (indice_ganador == 1) comp->cientificos++;
+                    else if (indice_ganador == 2) comp->reportes++;
+                }
+                else
+                {
+                    printf("[Detector Thread] [Computador P%d] CLASIFICACIÓN: Indeterminado (< 3 palabras clave).\n", mi_client_id);
+                }
+                pthread_mutex_unlock(&comp->lock);
+                printf("=========================================\n");
+
+                // Inferencia de usuario asincrónica aislada exclusivamente para este Computador
+                determinar_tipo_usuario(comp);
+            }
         }
         else
         {
@@ -329,8 +378,13 @@ void *hilo_detector(void *arg)
 // SALIR DEL SERVIDOR
 void handle_sigint(int sig)
 {
-    printf("\n[IALearner] Apagando servidor... ejecutando inferencia final.\n");
-    determinar_tipo_usuario(); // <--- AQUÍ EJECUTAS LA INFERENCIA
+    printf("\n[IALearner] Apagando servidor... Generando reportes finales por Computador:\n");
+    pthread_mutex_lock(&mutex_tabla_computadoras);
+    for (int i = 0; i < total_computadoras_registradas; i++)
+    {
+        determinar_tipo_usuario(&contextos_computadoras[i]);
+    }
+    pthread_mutex_unlock(&mutex_tabla_computadoras);
     exit(0);
 }
 
