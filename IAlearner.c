@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,56 +9,37 @@
 #include <ctype.h>   // manejo de caracteres
 #include <strings.h>
 #include <signal.h>
+#include <sched.h>
 
-// PARA LAS P ORACIONEES
-pthread_mutex_t mutex_queue = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t stdout_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t cond_loader = PTHREAD_COND_INITIALIZER; // Despierta al Loader o a los detectores
-pthread_cond_t cond_detectores = PTHREAD_COND_INITIALIZER;
-int P_param; // Parámetro P ingresado por consola
+#define MAX_QUEUE_SIZE 1000
+#define MAX_DICCIONARIOS 3
+#define MAX_PALABRAS 20
+#define MAX_COMPUTADORAS 50
+
+//======================= ESTRUCTURAS ===========================
 
 // COLAS DE ORACIONES COMPARTIDAS
-#define MAX_QUEUE_SIZE 1000
-typedef struct
-{
+typedef struct{
     char sentence[256];
     int client_id; // Para saber a qué contexto/computador pertenece
 } SentenceNode;
-SentenceNode sentence_queue[MAX_QUEUE_SIZE];
-int queue_count = 0;
-
-// NORMAL
-int comparar_palabras(const void *a, const void *b)
-{
-    // strcasecmp compara dos textos ignorando si son mayúsculas o minúsculas
-    return strcasecmp((const char *)a, (const char *)b);
-}
-
-// --- NUEVO: ESTRUCTURAS PARA BAG OF WORDS ---
-#define MAX_DICCIONARIOS 3
-#define MAX_PALABRAS 20
 
 // DICCIONARIO
-typedef struct
-{
+typedef struct{
     char clase[50];
     char palabras[MAX_PALABRAS][50];
     int total_palabras;
 } Diccionario;
-Diccionario diccionarios[MAX_DICCIONARIOS];
 
 // USUARIO
-typedef struct
-{
+typedef struct{
     int correos;
     int cientificos;
     int reportes;
     int total_documentos;
     pthread_mutex_t lock; // Candado para que los hilos no choquen
 } EstadisticasUsuario;
-EstadisticasUsuario stats = {0, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
 
-#define MAX_COMPUTADORAS 50 // Número máximo de computadoras
 typedef struct {
     int computador_id;          // ID del Launcher/pc
     int correos;
@@ -65,10 +48,43 @@ typedef struct {
     int total_documentos;
     pthread_mutex_t lock;       // Candado exclusivo para este computador
 } ContextoComputador;
+
+//================== Fin de estructuras ================================
+
+
+int P_param; // Parámetro P ingresado por consola
+
+SentenceNode sentence_queue[MAX_QUEUE_SIZE];
+int queue_count = 0;
+
+Diccionario diccionarios[MAX_DICCIONARIOS];
+
+EstadisticasUsuario stats = {0, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
+
 ContextoComputador contextos_computadoras[MAX_COMPUTADORAS];
 int total_computadoras_registradas = 0;
+
+
+//===================== VARIABLES SINCRONIZACION =======================
+// PARA LAS P ORACIONEES
+pthread_mutex_t mutex_queue = PTHREAD_MUTEX_INITIALIZER; //hilo para modificar la cola
+pthread_mutex_t stdout_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond_loader = PTHREAD_COND_INITIALIZER; // Despierta al Loader
+pthread_cond_t cond_detectores = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t mutex_tabla_computadoras = PTHREAD_MUTEX_INITIALIZER;
 
+
+
+// ====================== FUNCIONES ================================
+
+// FUNCION AUXILIAR
+int comparar_palabras(const void *a, const void *b)
+{
+    // strcasecmp compara dos textos ignorando si son mayúsculas o minúsculas
+    return strcasecmp((const char *)a, (const char *)b);
+}
+
+//========================= Contexto computador/ Diccionario ==================
 // Función para obtener o crear el contexto exclusivo de esa computadora
 ContextoComputador *obtener_o_crear_contexto_computador(int comp_id)
 {
@@ -101,52 +117,8 @@ ContextoComputador *obtener_o_crear_contexto_computador(int comp_id)
     return NULL;
 }
 
-// --- HILO LOADER: Espera a que haya P oraciones y da la orden ---
-void *hilo_loader(void *arg)
-{
-    while (1)
-    {
-        pthread_mutex_lock(&mutex_queue);
 
-        // Mientras la cola tenga menos de P oraciones, el Loader duerme
-        while (queue_count < P_param)
-        {
-            pthread_cond_wait(&cond_loader, &mutex_queue);
-        }
-
-        // Despertamos a los hilos detectores para que procesen en lote
-        pthread_cond_broadcast(&cond_detectores);
-
-        pthread_mutex_unlock(&mutex_queue);
-        usleep(100000); 
-    }
-    return NULL;
-}
-
-// imprimir y verificar la memoria de los diccionarios=
-void imprimir_diccionarios_cargados()
-{
-    printf("\n=== RADIOGRAFÍA DE LOS DICCIONARIOS EN MEMORIA ===\n");
-    for (int i = 0; i < MAX_DICCIONARIOS; i++)
-    {
-        // Solo imprimimos si la clase tiene un nombre válido
-        if (strlen(diccionarios[i].clase) > 0)
-        {
-            printf("-> Clase: '%s' (Contiene %d palabras clave)\n", diccionarios[i].clase, diccionarios[i].total_palabras);
-            printf("   Palabras en memoria: ");
-
-            // Recorremos y mostramos cada palabra exacta que se guardó
-            for (int j = 0; j < diccionarios[i].total_palabras; j++)
-            {
-                printf("[%s] ", diccionarios[i].palabras[j]);
-            }
-            printf("\n");
-        }
-    }
-    printf("==================================================\n\n");
-}
-
-// cargar diccionarios dinámicamente ---
+// cargar diccionarios dinámicamente
 void cargar_diccionarios()
 {
     FILE *archivo = fopen("diccionarios.txt", "r");
@@ -195,6 +167,123 @@ void cargar_diccionarios()
     printf("[+] Diccionarios cargados, LIMPIOS y ordenados exitosamente.\n");
 }
 
+void imprimir_diccionarios_cargados()
+{
+    printf("\n=== RADIOGRAFÍA DE LOS DICCIONARIOS EN MEMORIA ===\n");
+    for (int i = 0; i < MAX_DICCIONARIOS; i++)
+    {
+        // Solo imprimimos si la clase tiene un nombre válido
+        if (strlen(diccionarios[i].clase) > 0)
+        {
+            printf("-> Clase: '%s' (Contiene %d palabras clave)\n", diccionarios[i].clase, diccionarios[i].total_palabras);
+            printf("   Palabras en memoria: ");
+
+            // Recorremos y mostramos cada palabra exacta que se guardó
+            for (int j = 0; j < diccionarios[i].total_palabras; j++)
+            {
+                printf("[%s] ", diccionarios[i].palabras[j]);
+            }
+            printf("\n");
+        }
+    }
+    printf("==================================================\n\n");
+}
+
+//======================= HILO PARA CADA VENTANA -> Hilo Loader =====================
+// Función que ejecutará cada hilo para escuchar a una ventana específica
+void *atender_ventana(void *socket_desc)
+{
+    int sock = *(int *)socket_desc;
+    char buffer[1024] = {0};
+
+    char oracion[2048] = {0};
+    // char documento_completo[8192] = {0}; Almacena Todo lo que el usuario escribió
+    char id_proceso[20] = {0};
+    int valread;
+
+    // --- 1. FASE DE RECOLECCIÓN ---
+    while ((valread = read(sock, buffer, 1024)) > 0)
+    {
+        char tecla[50] = {0};
+
+        // Extraemos quién envía y qué tecla es (Ej: "P1: A")
+        if (sscanf(buffer, "P%[^:]: %s", id_proceso, tecla) == 2)
+        {
+
+            if (strcmp(tecla, "Return") == 0)
+            {
+                if (strlen(oracion) > 0)
+                {
+                    pthread_mutex_lock(&stdout_mutex);
+                    printf("\n[Data Center] [P%s] Oración completada: %s\n", id_proceso, oracion);
+                    pthread_mutex_unlock(&stdout_mutex);
+                    pthread_mutex_lock(&mutex_queue);
+
+                    if (queue_count < MAX_QUEUE_SIZE)
+                    {
+                        strcpy(sentence_queue[queue_count].sentence, oracion);
+                        sentence_queue[queue_count].client_id = atoi(id_proceso);
+                        queue_count++;
+
+                        pthread_mutex_lock(&stdout_mutex);
+                        printf("[Data Center] [P%s] Oración agregada a cola. Total en cola: %d/%d\n",
+                               id_proceso, queue_count, P_param);
+                        pthread_mutex_unlock(&stdout_mutex);
+
+                        // Si ya juntamos P oraciones, despertamos al Loader
+                        if (queue_count >= P_param)
+                        {
+                            pthread_cond_signal(&cond_loader);
+                        }
+                    }
+
+                    pthread_mutex_unlock(&mutex_queue);
+                    memset(oracion, 0, sizeof(oracion)); // Limpiar para la siguiente oración
+                }
+            }
+            else if (strcmp(tecla, "space") == 0)
+            {
+                // Traducimos la tecla de espacio a un espacio real
+                strcat(oracion, " ");
+            }
+            else if (strlen(tecla) == 1)
+            {
+                // Concatenamos las letras normales
+                strcat(oracion, tecla);
+            }
+        }
+        // Limpiamos el buffer de red
+        memset(buffer, 0, sizeof(buffer));
+    }
+
+    close(sock);
+    free(socket_desc);
+    return NULL;
+}
+
+void *hilo_loader(void *arg)
+{
+    while (1)
+    {
+        pthread_mutex_lock(&mutex_queue);
+
+        // Mientras la cola tenga menos de P oraciones, el Loader duerme
+        while (queue_count < P_param)
+        {
+            pthread_cond_wait(&cond_loader, &mutex_queue);
+        }
+
+        // Despertamos a los hilos detectores para que procesen en lote
+        pthread_cond_broadcast(&cond_detectores);
+
+        pthread_mutex_unlock(&mutex_queue);
+        usleep(100000); 
+    }
+    return NULL;
+}
+
+//=================== CLASIFICACION usuario- Hilo detector de documento ===========================
+
 void determinar_tipo_usuario(ContextoComputador *comp)
 {
     pthread_mutex_lock(&comp->lock);
@@ -234,6 +323,40 @@ void determinar_tipo_usuario(ContextoComputador *comp)
     printf("=========================================\n");
 
     pthread_mutex_unlock(&comp->lock);
+}
+ void asignar_cpu_detector(pthread_t thread, int detector_id)
+{
+    int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+
+    if (num_cpus <= 0)
+    {
+        fprintf(stderr, "No se pudo obtener el número de CPUs.\n");
+        return;
+    }
+
+    int cpu = detector_id % num_cpus;
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu, &cpuset);
+
+    int resultado = pthread_setaffinity_np(
+        thread,
+        sizeof(cpu_set_t),
+        &cpuset
+    );
+
+    if (resultado != 0)
+    {
+        fprintf(stderr,
+                "Error asignando Detector %d al CPU %d\n",
+                detector_id, cpu);
+    }
+    else
+    {
+        printf("[IALearner] Detector %d asignado al CPU %d\n",
+               detector_id, cpu);
+    }
 }
 
 // --- POOL DE HILOS DETECTORES: Procesan en paralelo el Bag of Words ---
@@ -378,7 +501,7 @@ void *hilo_detector(void *arg)
     return NULL;
 }
 
-// SALIR DEL SERVIDOR
+// =================SALIR DEL SERVIDOR=================
 void handle_sigint(int sig)
 {
     printf("\n[IALearner] Apagando servidor... Generando reportes finales por Computador:\n");
@@ -391,76 +514,7 @@ void handle_sigint(int sig)
     exit(0);
 }
 
-// Función que ejecutará cada hilo para escuchar a una ventana específica
-void *atender_ventana(void *socket_desc)
-{
-    int sock = *(int *)socket_desc;
-    char buffer[1024] = {0};
-
-    char oracion[2048] = {0};
-    // char documento_completo[8192] = {0}; Almacena Todo lo que el usuario escribió
-    char id_proceso[20] = {0};
-    int valread;
-
-    // --- 1. FASE DE RECOLECCIÓN ---
-    while ((valread = read(sock, buffer, 1024)) > 0)
-    {
-        char tecla[50] = {0};
-
-        // Extraemos quién envía y qué tecla es (Ej: "P1: A")
-        if (sscanf(buffer, "P%[^:]: %s", id_proceso, tecla) == 2)
-        {
-
-            if (strcmp(tecla, "Return") == 0)
-            {
-                if (strlen(oracion) > 0)
-                {
-                    pthread_mutex_lock(&stdout_mutex);
-                    printf("\n[Data Center] [P%s] Oración completada: %s\n", id_proceso, oracion);
-                    pthread_mutex_unlock(&stdout_mutex);
-                    pthread_mutex_lock(&mutex_queue);
-
-                    if (queue_count < MAX_QUEUE_SIZE)
-                    {
-                        strcpy(sentence_queue[queue_count].sentence, oracion);
-                        sentence_queue[queue_count].client_id = atoi(id_proceso);
-                        queue_count++;
-
-                        pthread_mutex_lock(&stdout_mutex);
-                        printf("[Data Center] [P%s] Oración agregada a cola. Total en cola: %d/%d\n",
-                               id_proceso, queue_count, P_param);
-                        pthread_mutex_unlock(&stdout_mutex);
-
-                        // Si ya juntamos P oraciones, despertamos al Loader
-                        if (queue_count >= P_param)
-                        {
-                            pthread_cond_signal(&cond_loader);
-                        }
-                    }
-
-                    pthread_mutex_unlock(&mutex_queue);
-                    memset(oracion, 0, sizeof(oracion)); // Limpiar para la siguiente oración
-                }
-            }
-            else if (strcmp(tecla, "space") == 0)
-            {
-                // Traducimos la tecla de espacio a un espacio real
-                strcat(oracion, " ");
-            }
-            else if (strlen(tecla) == 1)
-            {
-                // Concatenamos las letras normales
-                strcat(oracion, tecla);
-            }
-        }
-        // Limpiamos el buffer de red
-        memset(buffer, 0, sizeof(buffer));
-    }
-
-    close(sock);
-    free(socket_desc);
-    return NULL;
-}
+// ================= TERMINAN FUNCIONES =====================
 
 int main(int argc, char *argv[])
 {
@@ -485,6 +539,7 @@ int main(int argc, char *argv[])
     {
         pthread_t detector_thread;
         pthread_create(&detector_thread, NULL, hilo_detector, NULL);
+        asignar_cpu_detector(detector_thread, i);
         pthread_detach(detector_thread);
     }
     printf("[IALearner] Pool de %d hilos detectores e hilo Loader iniciados.\n", P_param);
