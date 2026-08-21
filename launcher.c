@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>      // Para fork(), exec(), pid_t
 #include <sys/wait.h>    // Para waitpid() y limpieza de zombies
+#include <signal.h>
 
 // Función para mostrar el menú de ayuda
 void mostrar_info() {

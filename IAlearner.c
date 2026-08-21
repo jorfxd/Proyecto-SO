@@ -207,8 +207,7 @@ void *atender_ventana(void *socket_desc)
         char tecla[50] = {0};
 
         // Extraemos quién envía y qué tecla es (Ej: "P1: A")
-        if (sscanf(buffer, "P%[^:]: %s", id_proceso, tecla) == 2)
-        {
+        if (sscanf(buffer, "P%19[^:]: %49s", id_proceso, tecla) == 2){
 
             if (strcmp(tecla, "Return") == 0)
             {
@@ -284,9 +283,9 @@ void *hilo_loader(void *arg)
 
 //=================== CLASIFICACION usuario- Hilo detector de documento ===========================
 
-void determinar_tipo_usuario(ContextoComputador *comp)
-{
+void determinar_tipo_usuario(ContextoComputador *comp){
     pthread_mutex_lock(&comp->lock);
+
     int total = comp->total_documentos;
 
     if (total == 0)
@@ -295,37 +294,69 @@ void determinar_tipo_usuario(ContextoComputador *comp)
         return;
     }
 
-    float prop_correo = (float)comp->correos / total;
-    float prop_cient = (float)comp->cientificos / total;
-    float prop_reporte = (float)comp->reportes / total;
+    // Saber qué tipos de documentos han aparecido hasta ahora
+    int tiene_correo = comp->correos > 0;
+    int tiene_cientifico = comp->cientificos > 0;
+    int tiene_reporte = comp->reportes > 0;
 
     printf("\n=========================================\n");
-    printf("[IALearner] Análisis Asincrónico de Usuario [Computador/Launcher P%d]:\n", comp->computador_id);
-    printf("Proporciones -> Correo: %.2f, Científico: %.2f, Reporte: %.2f\n", prop_correo, prop_cient, prop_reporte);
+    printf("[IALearner] Análisis Asincrónico de Usuario "
+           "[Computador/Launcher P%d]:\n", comp->computador_id);
 
-    // Lógica de la tabla de referencia de la rúbrica
-    if (prop_correo > 0.5 && prop_reporte > 0.3)
+    printf("Documentos detectados -> "
+           "Correo: %d, Científico: %d, Reporte: %d\n",
+           comp->correos,
+           comp->cientificos,
+           comp->reportes);
+
+    // Tabla de decisión
+
+    // Administrativo = Correo + Reporte
+    if (tiene_correo && tiene_reporte && !tiene_cientifico)
     {
-        printf("[!] Usuario en Computador P%d detectado: Personal administrativo\n", comp->computador_id);
+        printf("[!] Usuario en Computador P%d detectado: "
+               "Personal administrativo\n",
+               comp->computador_id);
     }
-    else if (prop_correo > 0.4 && prop_reporte > 0.4)
+
+    // Técnico = solamente Correo
+    else if (tiene_correo && !tiene_cientifico && !tiene_reporte)
     {
-        printf("[!] Usuario en Computador P%d detectado: Personal técnico\n", comp->computador_id);
+        printf("[!] Usuario en Computador P%d detectado: "
+               "Personal técnico\n",
+               comp->computador_id);
     }
-    else if (prop_correo > 0.3 && prop_cient > 0.4)
+
+    // Profesor = Correo + Científico
+    else if (tiene_correo && tiene_cientifico && !tiene_reporte)
     {
-        printf("[!] Usuario en Computador P%d detectado: Profesor\n", comp->computador_id);
+        printf("[!] Usuario en Computador P%d detectado: "
+               "Profesor\n",
+               comp->computador_id);
     }
+
+    // Estudiante = Científico + Reporte
+    else if (!tiene_correo && tiene_cientifico && tiene_reporte)
+    {
+        printf("[!] Usuario en Computador P%d detectado: "
+               "Estudiante\n",
+               comp->computador_id);
+    }
+
+    // No existe suficiente evidencia o hay ambigüedad
     else
     {
-        printf("[!] Usuario en Computador P%d detectado: Estudiante\n", comp->computador_id);
+        printf("[!] Usuario en Computador P%d: "
+               "Indeterminado\n",
+               comp->computador_id);
     }
+
     printf("=========================================\n");
 
     pthread_mutex_unlock(&comp->lock);
 }
- void asignar_cpu_detector(pthread_t thread, int detector_id)
-{
+
+ void asignar_cpu_detector(pthread_t thread, int detector_id){
     int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
 
     if (num_cpus <= 0)
@@ -616,7 +647,7 @@ int main(int argc, char *argv[])
         int *new_sock = malloc(sizeof(int));
         *new_sock = new_socket;
 
-        if (pthread_create(&thread_id, NULL, atender_ventana, (void *)new_sock) < 0)
+        if (pthread_create(&thread_id, NULL, atender_ventana, (void *)new_sock) != 0)
         {
             perror("No se pudo crear el hilo");
             free(new_sock);
